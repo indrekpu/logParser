@@ -1,0 +1,46 @@
+<?php
+
+class ModuleConfig_LogItemList extends List_Custom {
+
+  private $logItems = array();
+
+  public function init() {
+    $this->defineColumn('LastDate', 10);
+    $this->defineColumn('LastTime', 10);
+    $this->defineColumn('Total', 10, self::A_CENTER);
+    $this->defineColumn('DB', 20);
+    $this->defineColumn('Normalized Query', 20);
+    $this->setDefaultSort(0,1, self::S_DESC);
+  }
+
+  public function getQuStFullText($id){
+    return $this->logItems[$id]['QueryStatementFullText'];
+  }
+
+  public function setRows() {
+    $result =$this->getLogItemTable(ModuleConfig_LogParser::$tableName);
+    $this->logItems = $result;
+    for ($i=0; $i<count($result); $i++){
+      $this->addRow($i, array($result[$i]['LastDate'],
+                              $result[$i]['LastTime'],
+                              $result[$i]['Total'],
+                              $result[$i]['DB'],
+                              $result[$i]['QueryStatement']),
+                              self::COLOR_WHITE);
+    }
+  }
+
+  function getLogItemTable($tableName){
+    try{
+      $result = Query:: select('LastDate', 'LastTime', 'Total', 'DB', 'QueryStatement', 'QueryStatementFullText')
+        ->from($tableName)
+        ->execute()
+        ->getRows();
+      return $result;
+    }
+    catch(Query_exception $e){
+      Corelib::getErrorLogger()->log($e);
+    }
+  }
+
+}

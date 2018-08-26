@@ -1,0 +1,46 @@
+<?
+class ModuleConfig_PhpLogParser extends ModuleConfig_LogParser{
+
+  function __construct($tableName, $fieldNames, $fileName){
+    parent::__construct($fileName);
+    $this->parseLogFile($tableName, $fieldNames);
+  }
+
+  public function isNewLogItem($line){
+    return $this->validateDate(substr($line,1,19));
+  }
+  function validateDate($date, $format = 'Y-m-d H:i:s'){
+    $d = DateTime::createFromFormat($format, $date);
+    return $d && $d->format($format) == $date;
+  }
+
+  function readLogValues($logItem, $j){
+    $logItem = trim($logItem);
+    $date = substr($logItem, 1, 10);
+    $time = substr($logItem, 12, 8);
+    $queryPos = strpos($logItem, "error: ")+7;
+    $queryStatement = substr($logItem, $queryPos);
+    $queryStatement = trim($queryStatement);
+    $queryStatementFullText = $queryStatement;
+    //$queryStatement = $this->normalizeQuery($queryStatement,"'");
+    //$queryStatement = $this->normalizeQuery($queryStatement,'"');
+    //$queryStatement = preg_replace('/[0-9]+/', '', $queryStatement);
+    return array($date, $time, $date, $time, 1, $j, '', '', '', $queryStatement, $queryStatementFullText);
+  }
+
+  function logItemExist($tableName, $logValues){
+    try{
+      $result = Query:: select()
+        ->from($tableName)
+        ->where ('QueryStatement = "' . mysql_escape_string($logValues['QueryStatement']) . '"')
+        ->execute()
+        ->getRow();
+      return $result;
+    }
+    catch(Query_exception $e){
+      Corelib::getErrorLogger()->log($e);
+    }
+  }
+
+}
+?>

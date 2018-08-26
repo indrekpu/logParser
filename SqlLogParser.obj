@@ -1,0 +1,59 @@
+<?
+class ModuleConfig_SqlLogParser extends ModuleConfig_LogParser{
+
+  function __construct($tableName, $fieldNames, $fileName){
+    parent::__construct($fileName);
+    $this->parseLogFile($tableName, $fieldNames);
+  }
+
+  public function isNewLogItem($line){
+    return $this->validateDate($line);
+  }
+  function validateDate($date, $format = 'm/d/y H:i:s'){
+    $d = DateTime::createFromFormat($format, $date);
+    return $d && $d->format($format) == $date;
+  }
+
+  function readLogValues($logItem, $j){
+    $logItem = trim($logItem);
+    $date = $this->formatDate(substr($logItem, 0, 8));
+    $time = substr($logItem, 9, 8);
+    $dB = $this->getStringBetween($logItem,"DB: [","], Thread");
+    $errorNo = $this->getStringBetween($logItem,"ErrorNo: ",", ErrorMsg");
+    $errorMsg = $this->getStringBetween($logItem, "ErrorMsg: [","], Query");
+    $errorMsg = $this->normalizeQuery($errorMsg,"'");
+    $errorMsg = $this->normalizeQuery($errorMsg,'"');
+    $errorMsg = preg_replace('/[0-9]+/', '', $errorMsg);
+    $queryPos = strpos($logItem, ", Query: [")+10;
+    $queryStatement = substr($logItem, $queryPos, -1);
+    $queryStatementFullText = $queryStatement;
+    $queryStatement = $this->normalizeQuery($queryStatement,"'");
+    $queryStatement = $this->normalizeQuery($queryStatement,'"');
+    $queryStatement = preg_replace('/[0-9]+/', '', $queryStatement);
+    return array($date, $time, $date, $time, 1, $j, $dB, $errorNo, $errorMsg, $queryStatement, $queryStatementFullText);
+  }
+  function formatDate($oldDate){
+    $temp = explode('/', $oldDate);
+    $newDate = $temp[2].'-'.$temp[0].'-'.$temp[1];
+    return $newDate;
+  }
+
+  function logItemExist($tableName, $logValues){
+    try{
+      $result = Query:: select()
+        ->from($tableName)
+        ->where('DB = "' . $logValues['DB'] . '"')
+        ->where ('ErrorNo = ' . $logValues['ErrorNo'])
+        ->where ('ErrorMsg = "' . mysql_escape_string($logValues['ErrorMsg']) . '"')
+        ->where ('QueryStatement = "' . mysql_escape_string($logValues['QueryStatement']) . '"')
+        ->execute()
+        ->getRow();
+      return $result;
+    }
+    catch(Query_exception $e){
+      Corelib::getErrorLogger()->log($e);
+    }
+  }
+
+}
+?>

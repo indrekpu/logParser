@@ -1,0 +1,146 @@
+<?
+abstract class ModuleConfig_LogParser{
+  public static $fieldNames = ['FirstDate', 'FirstTime', 'LastDate', 'LastTime', 'Total',  'LineNrInLogFile', 'DB', 'ErrorNo', 'ErrorMsg', 'QueryStatement', 'QueryStatementFullText'];
+  public static $tableName = 'logParser_logs';
+
+
+  function __construct($fileName){
+    $this->logFile = fopen($fileName, "r");
+  }
+
+  public static function getParser($tableName, $fieldNames, $fileName, $Module){
+    $availableParsers = ['mysql' => 'SqlLogParser', 'dat_error'=>'PhpLogParser'];
+    $pathParts = pathinfo($fileName);
+    $fileType = $pathParts['filename'];
+    $fileType = preg_replace('/[0-9]+/', '', $fileType);
+    if ($availableParsers[$fileType] <> '')
+      $parser =$Module->getObject($availableParsers[$fileType],$tableName, $fieldNames, $fileName);
+    else
+      Message::show("There is no parser available for selected file type - " .$fileType);
+  }
+
+  function parseLogFile($tableName, $fieldNames){
+    if ($this->logFile){
+      $i = 0; $j = 1;
+      while (($line = fgets($this->logFile)) !== false){
+        $line = trim($line);
+        $i++;
+        if ($this->isNewLogItem($line)){
+          if (strlen($logItem)>0){
+            $logValues = $this->prepareRecord($fieldNames, $logItem, $j);
+            $j = $i;
+            $this->writeRecord($tableName, $fieldNames, $logValues);
+          }
+          $logItem = $line;
+        }
+        else
+          $logItem = $logItem . " " . $line;
+      }
+      $logValues = $this->prepareRecord($fieldNames, $logItem, $j);
+      $this->writeRecord($tableName, $fieldNames, $logValues);
+      fclose($this->logFile);
+      Message::show("The Parser has finished");
+    }
+  }
+
+  abstract function isNewLogItem($line);
+
+  function prepareRecord($fieldNames, $logItem, $j){
+    $logValues = $this->readLogValues($logItem, $j);
+    $logValues = $this->addKeys($fieldNames, $logValues);
+    return $logValues;
+  }
+
+  abstract function readLogValues($logItem, $j);
+
+  function normalizeQuery($queryStatement,$delimiter){
+    if (substr_count($queryStatement,$delimiter)>0){
+      $temp = explode($delimiter,$queryStatement);
+      $isOpen = false;
+      for ($i=0; $i<count($temp); $i++){
+        if ($isOpen){
+          $newStatement = $newStatement . $delimiter . $delimiter;
+          $isOpen = false;
+        }
+        else{
+          $newStatement = $newStatement . $temp[$i];
+          $isOpen = true;
+        }
+      }
+      return $newStatement;
+    }
+    return $queryStatement;
+  }
+
+  function addKeys($fieldNames, $logValues){
+    try{
+      $newLogValues = array();
+      for ($i=0; $i<count($fieldNames); $i++)
+        $newLogValues[$fieldNames[$i]] = $logValues[$i];
+      return $newLogValues;
+    }
+    catch (Exception $e) {
+      Corelib::showException($e);
+    }
+  }
+
+  function getStringBetween($string, $start, $end){
+      $string = ' ' . $string;
+      $ini = strpos($string, $start);
+      if ($ini == 0) return '';
+      $ini += strlen($start);
+      $len = strpos($string, $end, $ini) - $ini;
+      return substr($string, $ini, $len);
+  }
+
+  function writeRecord($tableName, $fieldNames, $logValues){
+    $result = $this-> logItemExist($tableName, $logValues);
+    if ($result)
+      $this->overWriteRecord($tableName, $fieldNames, $logValues, $result);
+    else
+      $this->writeNewRecord($tableName, $fieldNames, $logValues);
+  }
+
+  abstract function logItemExist($tableName, $logValues);
+
+  function overWriteRecord($tableName, $fieldNames, $logValues, $result){
+    $n = $result['Total']+1;
+    $latestDateTime = $this->isLater($result, $logValues);
+    try{
+      Query::update($tableName)
+        ->set('Total = ' . $n)
+        ->set('LastDate = "' . $latestDateTime['LastDate'] . '"')
+        ->set('LastTime = "' . $latestDateTime['LastTime'] . '"')
+        ->where('id = ' . $result['id'])
+        ->execute();
+    }
+    catch(Query_exception $e){
+      Corelib::getErrorLogger()->log($e);
+    }
+  }
+
+  function writeNewRecord($tableName, $fieldNames, $logValues){
+    try{
+      Query::insert()
+        ->into($tableName)
+        ->fields($fieldNames)
+        ->values($logValues)
+        ->execute();
+    }
+    catch(Query_exception $e){
+      Corelib::getErrorLogger()->log($e);
+    }
+  }
+
+  function isLater($result, $logValues){
+    $d1 = strtotime($result['LastDate']);
+    $d2 = strtotime($logValues['LastDate']);
+    $t1 = strtotime($result['LastTime']);
+    $t2 = strtotime($logValues['LastTime']);
+    if ($d1 < $d2 or ($d1 == $d2 and $t1 < $t2))
+      return $logValues;
+    else
+      return $result;
+  }
+}
+?>

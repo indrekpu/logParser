@@ -1,0 +1,158 @@
+<?php
+
+class Scr_LOGS extends Screen {
+
+
+  private $permanentList;
+  private $temporaryList;
+  private $temporaryListLoaded = false;
+  private $logItemList;
+
+
+  public function init() {
+    $this->permanentList = $this->Module->getObject('LogfileList');
+    $this->logItemList = $this->Module->getObject('LogItemList');         //lisatud
+    $this->setListBox('lbPerm', $this->permanentList);
+    $this->setListBox('lbLogItems',$this->logItemList);                   //lisatud
+    $filters = $this->permanentList->getFilters();
+    foreach ($filters as $field => $value) {
+      $this->data->setField($field, $value);
+    }
+    $this->updatePermanentList();
+  }
+
+
+  public function refresh_btnRefreshPerm() {
+    $this->updatePermanentList();
+  }
+
+  public function refresh_LogParserButton() {                            //lisatud
+    $id = $this->getListBox('lbPerm')->getSelectedId();
+    $fileName = $this->getListBox('lbPerm')->getFile($id);
+    ModuleConfig_LogParser::getParser(ModuleConfig_LogParser::$tableName, ModuleConfig_LogParser::$fieldNames, $fileName, $this->Module);
+  }
+
+   public function refresh_lbLogItems() {                                 //lisatud
+    $id = $this->getListBox('lbLogItems')->getSelectedId();
+    $logItemQuStFullText = $this->getListBox('lbLogItems')->getQuStFullText($id);
+    $this->data->setField('logItemFullText', $logItemQuStFullText);
+  }
+
+
+  private function updatePermanentList() {
+    $this->permanentList->setFilter('fname',       $this->data->getField('fName'));
+    $this->permanentList->setFilter('from',        $this->data->getField('from'));
+    $this->permanentList->setFilter('to',          $this->data->getField('to'));
+    $this->permanentList->setFilter('phpLogs',     $this->data->getField('phpLogs'));
+    $this->permanentList->setFilter('agentLogs',   $this->data->getField('agentLogs'));
+    $this->permanentList->setFilter('fileHistory', $this->data->getField('fileHistory'));
+
+    $this->permanentList->refresh();
+  }
+
+  public function refresh_btnRefreshTemp() {
+    $this->updateTemporaryList();
+  }
+
+  public function refresh_btnArchive() {
+    $homedir = Configuration::get('homedir');
+    $baseDir = realpath($homedir . 'log');
+
+    if (!$baseDir  || !is_dir($baseDir)) {
+      return;
+    }
+
+    $msg  = 'Are you sure you want to archive all logs from previous years?';
+    $buttons = array('a' => '&Archive', 'c' => '&Cancel');
+    if (Message::prompt($msg, $buttons) !== 'a') {
+      return;
+    }
+
+    $successCount = $failCount = 0;
+
+    $iter = new DirectoryIterator($baseDir);
+
+    foreach ($iter as $dir) {
+      if ($dir->isDot() || !$dir->isDir()) {
+        continue;
+      }
+
+      $baseName = $dir->getFileName();
+
+      if (!preg_match('/^\d{4}$/', $baseName) || $baseName >= date('Y')) {
+        continue;
+      }
+
+      $zip     = $baseDir . DIRECTORY_SEPARATOR . $baseName . '.zip';
+      $zipDir  = $baseDir . DIRECTORY_SEPARATOR . $baseName;
+
+      $this->Module->Agent->fs('fMessage ?', 'Archiving directory ' . $zipDir);
+
+      $zip = $this->getUniqueFileName($zip);
+      $this->zipFiles($zip, $zipDir . '\\*.*');
+
+      if (file_exists($zip)) {
+        $successCount++;
+        $this->delDir($zipDir);
+      }
+      else {
+        $failCount++;
+      }
+    }
+
+    if ($successCount + $failCount == 0) {
+      Message::show('No logs archived');
+      return;
+    }
+
+    $message = sprintf(
+      '%d folder%s archived',
+      $successCount, $successCount == 1 ? '' : 's'
+    );
+
+    if ($failCount > 0) {
+      $message = sprintf(
+        '%s failed',
+        $message, $failCount
+      );
+    }
+
+    Message::show($message);
+  }
+
+
+  private function zipFiles($zipFile, $fileMask) {
+    $this->Agent->fs('zipFiles ? ? "Y"', $zipFile, $fileMask);
+  }
+
+
+  private function getUniqueFileName($zipFile, $version = 0) {
+    if ($version > 0) {
+      $pathInf = pathinfo($zipFile);
+      $uniqName = $pathInf['dirname'] . DIRECTORY_SEPARATOR . $pathInf['filename'] . '_' . $version . '.' . $pathInf['extension'];
+    }
+    else {
+      $uniqName = $zipFile;
+    }
+
+    if (file_exists($uniqName)) {
+      $version++;
+      return $this->getUniqueFileName($zipFile, $version);
+    }
+    return $uniqName;
+  }
+
+
+  private function delDir($dir) {
+    if (!$dir || !is_dir($dir)) return;
+    $baseDir = realpath(Configuration::get('homedir') . 'log');
+    if (stripos($dir, $baseDir) === false)  return;
+
+    system('rmdir /S /Q ' . $dir);
+    if (file_exists($dir) && is_dir($dir)) {
+      rmDir($dir);
+    }
+  }
+
+
+}

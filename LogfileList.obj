@@ -1,0 +1,281 @@
+<?php
+
+class ModuleConfig_LogfileList extends List_Custom {
+
+  private $baseLogDir;
+  private $files = array();
+  private $fNamePattern = null;
+  private $filterName = 'Extension';
+  private $filterParams;
+  private $filters = array(
+    'from'        => '',
+    'to'          => '',
+    'fname'       => '',
+    'phplogs'     => 'X',
+    'agentlogs'   => 'X',
+    'fileHistory' => '',
+  );
+
+
+  public function init() {
+    $homedir = Configuration::get('homedir');
+    $this->baseLogDir = realpath($homedir . DIRECTORY_SEPARATOR . 'log')     . DIRECTORY_SEPARATOR;
+    $this->archiveDir = realpath($homedir . DIRECTORY_SEPARATOR . 'archive') . DIRECTORY_SEPARATOR;
+
+    $this->defineColumn('File name', 52);
+    $this->defineColumn('File size', 15, self::A_RIGHT, self::T_NUMERIC);
+    $this->defineColumn('Last modified', 15, self::A_RIGHT);
+
+    $this->registerHandler('e', array($this, 'viewFile'), false, 'View');
+
+    $this->setDefaultSort(2, self::S_DESC);
+    $this->setDefaultFilters();
+  }
+
+  // ainuke meetod, mis siia kirjutatud
+  public function getFile($id){
+    return $this->files[$id];
+  }
+
+  private function setDefaultFilters() {
+    $this->filters['from']  = date('m-Y');
+    $this->filters['fname'] = '*.*';
+  }
+
+  public function setFileNameFilter($filterFileName) {
+    $this->filterFileName = $filterFileName;
+  }
+
+
+  public function getFilters() {
+    return $this->filters;
+  }
+
+
+  public function getFilter($name) {
+    $name = strtolower($name);
+    return isset($this->filters[$name]) ? $this->filters[$name] : null;
+  }
+
+
+  public function setFilter($name, $value) {
+    $name = strtolower($name);
+    $this->filters[$name] = $value;
+  }
+
+
+  public function refresh() {
+
+//    ob_start();
+//    phpinfo();
+//    $cont = ob_get_contents();
+//    file_put_contents('C:\\platforms\\rt102\\log\\2012\\10\\phpinfo.txt', $cont);
+//    ob_end_flush();
+    $from = $this->getNormalizedDate('from');
+    $to   = $this->getNormalizedDate('to');
+    $this->setFileNamePattern($this->getFilter('fname'));
+
+    $this->files = array();
+
+    // Clear PHP's internal cache of file modification times, etc.
+    clearstatcache();
+
+    if ($this->baseLogDir) {
+      $dirs = $this->getDirsInRange($from, $to);
+
+      $total = count($dirs);
+      $i = 0;
+      foreach ($dirs as $subDir) {
+        $dir = $this->baseLogDir . $subDir;
+        if (!is_dir($dir)) {
+          $dir = $this->archiveDir . $subDir;
+
+          if (!is_dir($dir)) {
+            continue;
+          }
+        }
+        $i++;
+        $msg = 'Retrieving list of files ' . sprintf("%01.2f", $i / $total * 100) . '%';
+        $this->Agent->fs('fMessage ?', $msg);
+
+        $this->readFilesFromDirectory($dir, true);
+      }
+    }
+    $this->Agent->fs('fMessage ""');
+
+    $this->changed = true;
+  }
+
+
+  public function getNormalizedDate($field) {
+    $value = $this->getFilter($field);
+    if (!$value) return '';
+    $date = explode('-', $value);
+    return $date[1] . '-' . $date[0] . '-01';
+  }
+
+  public function loadTemporaryLogs($lanid) {
+    $this->files = array();
+
+    // Clear PHP's internal cache of file modification times, etc.
+    clearstatcache();
+
+
+    $this->readFilesFromDirectory($this->baseLogDir, false);
+    $this->changed = true;
+  }
+
+
+  public function setRows() {
+    $offset = strlen($this->baseLogDir);
+
+    foreach ($this->files as $i => $fileName) {
+      $relativeFileName = substr($fileName, $offset);
+
+      $size = filesize($fileName);
+      #$sizeKB = number_format($size / 1024, 2, '.', ' ');
+      $sizeKB = sprintf('%.2f KB', $size / 1024);
+      $modTimestamp = filemtime($fileName);
+      $modTime = date('Y-m-d H:i:s', $modTimestamp);
+
+      if (stripos($fileName, 'error') !== false) {
+        $rowColor = self::COLOR_RED;
+      }
+      else {
+        $rowColor = self::COLOR_WHITE;
+      }
+
+      $this->addRow($i, array($relativeFileName, $sizeKB, $modTime), $rowColor);
+    }
+  }
+
+
+  public function viewFile($i) {
+    AgentCommunicator::fs('editfile ?', $this->files[$i]);
+  }
+
+
+  private function getDirsInRange($from, $to) {
+    $start = $from ? $from : $to;
+    $end   = $to   ? $to : date('Y-m-d');
+    if (!$start && $end) return array();
+
+    $start = (int)date('Ym', strtotime($start));
+    $end   = (int)date('Ym', strtotime($end));
+
+    if ($start >= $end) return array($this->getDateLogSubDir($start . '01'));
+
+    $arr = array();
+    for ($i = $start; $i <= $end; $i++) {
+      $arr[] = $this->getDateLogSubDir($i . '01');
+    }
+    return $arr;
+  }
+
+
+  private function getDateLogSubDir($date) {
+    $time = strtotime($date);
+    return date('Y', $time) . DIRECTORY_SEPARATOR . date('m', $time);
+  }
+
+
+  private function readFilesFromDirectory($dir, $recursive) {
+    if (!is_dir($dir)) {
+      return;
+    }
+
+    $iter = new DirectoryIterator($dir);
+
+    $i = 0;
+    foreach ($iter as $file) {
+      if ($file->isDot()) {
+        continue;
+      }
+
+      if ($file->isDir()) {
+        if ($recursive) {
+          $subdir = $file->getPathName();
+          $this->readFilesFromDirectory($subdir, true);
+        }
+
+        continue;
+      }
+
+
+      if (!$this->matchesFilters($file)) {
+        continue;
+      }
+
+      $this->files[] = $file->getPathName();
+    }
+  }
+
+
+  private function matchesFilters($file) {
+    if (!$this->filterFilename($file->getFileName())) return false;
+    if (!$this->filterLogType($file->getPathName()))  return false;
+    return true;
+  }
+
+
+  private function filterLogType($fileName) {
+    $phpLogs   = $this->getFilter('phpLogs')     > '';
+    $agentLogs = $this->getFilter('agentLogs')   > '';
+    $fHist     = $this->getFilter('fileHistory') > '';
+
+    if ($phpLogs && $agentLogs && $fHist) return true;
+
+    $dir = dirname($fileName);
+    if (!$agentLogs && !preg_match('/php$/i', $dir))        return false;
+    if (!$phpLogs   &&  preg_match('/php$/i', $dir))        return false;
+    if (!$fHist     &&  preg_match('/FileHistory/i', $dir)) return false;
+    return true;
+  }
+
+
+  private function filterFilename($fileName) {
+    //match any
+    if ($this->fNamePattern == '.*') return true;
+
+    return preg_match('/' . $this->fNamePattern . '/', $fileName);
+  }
+
+
+  private function setFileNamePattern($filter) {
+    $this->fNamePattern = $this->getFilePattern($filter);
+  }
+
+
+  private function getFilePattern($filter) {
+
+    if (!$filter || $filter == '*' || $filter == '_') return '.*';
+
+    $pattern = preg_replace('[^A-Za-z0-9\_\*\.\-]', '', $filter);
+
+    $pattern = str_replace('.', '\\.', $pattern);
+    $pattern = str_replace('_', '.',   $pattern);
+    $pattern = str_replace('*', '.*',  $pattern);
+
+    if (preg_match('/^\_/', $filter)) $pattern  = '^' . $pattern;
+    if (preg_match('/\_$/', $filter)) $pattern .= '$' ;
+
+    return $pattern;
+  }
+
+
+  private function filterLanID($fileName) {
+    if (!$this->filterExtension($fileName)) {
+      return false;
+    }
+
+    $lanid = $this->filterParams;
+
+    if ($lanid == '') {
+      return true;
+    }
+
+    $pattern = '/.*\.' . $lanid . '[A-Z]*\.log/';
+    return preg_match($pattern, $fileName);
+  }
+
+}
